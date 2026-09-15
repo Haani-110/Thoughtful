@@ -97,7 +97,12 @@ export async function POST(request: Request) {
     const payload = await buildRecommendations(answers);
     return NextResponse.json({ status: "ok", ...payload });
   } catch (error) {
-    console.error("[recommendations] unexpected failure", error);
+    // Log the message only — never the error object (it may carry
+    // request/response details we don't want in server logs).
+    console.error(
+      "[recommendations] unexpected failure",
+      error instanceof Error ? error.message : "unknown error",
+    );
     return NextResponse.json(
       { status: "error", message: "recommendations-failed" },
       { status: 500 },

@@ -15,7 +15,13 @@ export function GiftCard({
   index: number;
   onView: (item: RecommendationItem) => void;
 }) {
-  const { gift } = item;
+  const { product } = item;
+  const isEbay = product.source === "ebay";
+  const eyebrow = isEbay
+    ? "eBay"
+    : product.category
+      ? GIFT_CATEGORY_LABELS[product.category]
+      : null;
   const [imageFailed, setImageFailed] = useState(false);
 
   return (
@@ -30,8 +36,8 @@ export function GiftCard({
           </div>
         ) : (
           <Image
-            src={gift.image}
-            alt={gift.name}
+            src={product.image}
+            alt={product.name}
             fill
             sizes="(min-width: 1024px) 30vw, (min-width: 640px) 45vw, 100vw"
             className="object-cover"
@@ -43,7 +49,7 @@ export function GiftCard({
       <div className="flex flex-1 flex-col p-5">
         <div className="flex items-center justify-between gap-3">
           <p className="text-[0.6875rem] font-medium tracking-[0.22em] text-bronze uppercase">
-            {GIFT_CATEGORY_LABELS[gift.category]}
+            {eyebrow}
           </p>
           <p className="font-serif text-[0.9375rem] text-burgundy">
             {item.matchScore}
@@ -54,15 +60,21 @@ export function GiftCard({
         </div>
 
         <h3 className="mt-3 font-serif text-xl leading-snug tracking-[-0.01em] text-charcoal">
-          {gift.name}
+          {product.name}
         </h3>
         <p className="mt-1.5 text-sm font-medium text-charcoal">
-          {gift.priceLabel}
-          <span className="ml-2 font-normal text-muted">· about ${gift.price}</span>
+          {product.priceLabel}
+          {!isEbay ? (
+            <span className="ml-2 font-normal text-muted">
+              · about ${product.price}
+            </span>
+          ) : null}
         </p>
-        <p className="mt-3 text-sm leading-relaxed text-muted">
-          {gift.description}
-        </p>
+        {product.description ? (
+          <p className="mt-3 text-sm leading-relaxed text-muted">
+            {product.description}
+          </p>
+        ) : null}
 
         <div className="mt-5 flex-1 border-t border-line-soft pt-4">
           <p className="text-[0.6875rem] font-medium tracking-[0.22em] text-faint uppercase">
@@ -73,18 +85,34 @@ export function GiftCard({
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => onView(item)}
-          aria-label={`View details for ${gift.name}`}
-          className="group mt-5 inline-flex w-fit items-center gap-2 border-b border-transparent pb-0.5 text-sm font-medium text-burgundy transition-colors duration-300 hover:border-burgundy/50"
-        >
-          View gift
-          <ArrowRight
-            className="h-3.5 w-3.5 transition-transform duration-300 group-hover:translate-x-1"
-            aria-hidden="true"
-          />
-        </button>
+        {isEbay && product.itemUrl ? (
+          <a
+            href={product.itemUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Shop ${product.name} on eBay`}
+            className="group mt-5 inline-flex w-fit items-center gap-2 border-b border-transparent pb-0.5 text-sm font-medium text-burgundy transition-colors duration-300 hover:border-burgundy/50"
+          >
+            Shop on eBay
+            <ArrowRight
+              className="h-3.5 w-3.5 transition-transform duration-300 group-hover:translate-x-1"
+              aria-hidden="true"
+            />
+          </a>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onView(item)}
+            aria-label={`View details for ${product.name}`}
+            className="group mt-5 inline-flex w-fit items-center gap-2 border-b border-transparent pb-0.5 text-sm font-medium text-burgundy transition-colors duration-300 hover:border-burgundy/50"
+          >
+            View gift
+            <ArrowRight
+              className="h-3.5 w-3.5 transition-transform duration-300 group-hover:translate-x-1"
+              aria-hidden="true"
+            />
+          </button>
+        )}
       </div>
     </article>
   );

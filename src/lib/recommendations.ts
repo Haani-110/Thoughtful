@@ -2,23 +2,33 @@
  * Thoughtful's recommendation engine.
  *
  * Pipeline: validated answers → ONE shared deterministic candidate pool
- * (src/lib/gift-matching.ts) → OpenRouter ranking → strict validation →
+ * (src/lib/gift-matching.ts) → optional live eBay listings (src/lib/ebay)
+ * → OpenRouter ranking over BOTH candidate sets → strict validation →
  * blended scoring → grouped recommendations. Every failure path lands on
- * the deterministic fallback built from the SAME pool, so behaviour is
- * consistent and nothing ever comes back empty.
+ * the deterministic catalog fallback built from the SAME pool, so
+ * behaviour is consistent and nothing ever comes back empty.
  *
  * Product facts (name, price, image, description) are ALWAYS read back
- * from the local catalog by giftId — never from model output. The AI
- * only contributes: giftId, relevance judgment, pick type, and a reason.
+ * from the local catalog or the real eBay listing by id — never from
+ * model output. The AI only contributes: giftId, relevance judgment,
+ * pick type, and a reason.
  */
 
-import { GIFTS, type Gift } from "@/data/gifts";
+import { type Gift, type GiftCategory } from "@/data/gifts";
 import {
+  MATCH_WEIGHTS,
+  MAX_MATCH_SCORE,
+  budgetCapFor,
   matchPercentage,
   rankGifts,
   selectCandidatePool,
   type ScoredGift,
 } from "@/lib/gift-matching";
+import {
+  formatEbayPrice,
+  type EbayListing,
+} from "@/lib/ebay/normalize";
+import { searchEbayGiftListings } from "@/lib/ebay/search";
 import {
   CANDIDATE_LIMIT,
   buildSystemPrompt,
@@ -39,8 +49,42 @@ export type RecommendationPick =
   | "personal"
   | "experiences";
 
+/** Where a recommendation's product came from. */
+export type RecommendationSource = "catalog" | "ebay";
+
+/**
+ * Shared display shape for a catalog gift or a live eBay listing.
+ *
+ * Catalog entries are mapped 1:1 from the local Gift. eBay entries carry
+ * ONLY real data from the eBay API — fields the API did not provide stay
+ * null/empty, never fabricated, so no fake metadata is ever introduced.
+ */
+export interface RecommendationProduct {
+  source: RecommendationSource;
+  /** Unique id — catalog slug or "ebay-<itemId>". */
+  id: string;
+  name: string;
+  image: string;
+  /** Numeric price — catalog: USD estimate, eBay: live listing price. */
+  price: number;
+  /** ISO-4217 code ("USD" for the catalog). */
+  currency: string;
+  /** Display price — catalog band label ("$25–50") or exact listing price. */
+  priceLabel: string;
+  /** One line of product truth; null only for eBay listings without one. */
+  description: string | null;
+  /** Curated category — null for eBay listings. */
+  category: GiftCategory | null;
+  /** Curated metadata — empty for eBay listings. */
+  interests: string[];
+  occasions: string[];
+  styles: string[];
+  /** The real eBay item page — null for catalog gifts. */
+  itemUrl: string | null;
+}
+
 export interface RecommendationItem {
-  gift: Gift;
+  product: RecommendationProduct;
   matchScore: number;
   reason: string;
   pick: RecommendationPick;
@@ -62,12 +106,114 @@ export interface RecommendationsPayload {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Product adapters — the only place Gift / EbayListing become the    */
+/*  shared recommendation shape                                        */
+/* ------------------------------------------------------------------ */
+
+/** Map a curated catalog gift 1:1 — no field is lost or altered. */
+export function toCatalogProduct(gift: Gift): RecommendationProduct {
+  return {
+    source: "catalog",
+    id: gift.id,
+    name: gift.name,
+    image: gift.image,
+    price: gift.price,
+    currency: "USD",
+    priceLabel: gift.priceLabel,
+    description: gift.description,
+    category: gift.category,
+    interests: gift.interests,
+    occasions: gift.occasions,
+    styles: gift.styles,
+    itemUrl: null,
+  };
+}
+
+/** Map a real eBay listing — only API data, nothing invented. */
+function toEbayProduct(listing: EbayListing): RecommendationProduct {
+  return {
+    source: "ebay",
+    id: `ebay-${listing.itemId}`,
+    name: listing.title,
+    image: listing.image,
+    price: listing.price,
+    currency: listing.currency,
+    priceLabel: formatEbayPrice(listing.price, listing.currency),
+    description: listing.description,
+    category: null,
+    interests: [],
+    occasions: [],
+    styles: [],
+    itemUrl: listing.url,
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /*  Internal types + knobs                                             */
 /* ------------------------------------------------------------------ */
 
 /** Validated item plus its objective deterministic score (for tie-breaks). */
 interface ValidatedItem extends RecommendationItem {
   detScore: number;
+}
+
+/**
+ * One candidate for the AI stage, from either source. The model is shown
+ * the serialized form of these entries and may only pick from them.
+ */
+interface CandidateEntry {
+  /** Stable id the model must echo back character-for-character. */
+  id: string;
+  product: RecommendationProduct;
+  /** Objective deterministic score 0–100 (for blending and tie-breaks). */
+  detScore: number;
+  /** Pick used when the model's pick is missing or invalid. */
+  fallbackPick: RecommendationPick;
+}
+
+function catalogEntry(scored: ScoredGift): CandidateEntry {
+  return {
+    id: scored.gift.id,
+    product: toCatalogProduct(scored.gift),
+    detScore: matchPercentage(scored.score),
+    fallbackPick: inferPick(scored.gift),
+  };
+}
+
+/** How many live listings may join the AI stage. */
+const EBAY_CANDIDATE_LIMIT = 6;
+
+/**
+ * eBay listings have no curated metadata, so the ONLY component of the
+ * deterministic score they can honestly earn is the budget fit — the same
+ * 25/100 the catalog scoring gives a gift within budget.
+ */
+const EBAY_DETERMINISTIC_PERCENT = Math.round(
+  (MATCH_WEIGHTS.budget / MAX_MATCH_SCORE) * 100,
+);
+
+/**
+ * Narrow the raw search results to the listings that take part in this
+ * brief: same-currency budget fit (an open budget keeps everything),
+ * capped at EBAY_CANDIDATE_LIMIT.
+ */
+function selectEbayCandidates(
+  listings: EbayListing[],
+  answers: GiftAnswers,
+): EbayListing[] {
+  const cap = budgetCapFor(answers.budget, answers.customBudget);
+  return listings
+    .filter((listing) => listing.currency === "USD" && listing.price <= cap)
+    .slice(0, EBAY_CANDIDATE_LIMIT);
+}
+
+function ebayEntry(listing: EbayListing): CandidateEntry {
+  return {
+    id: `ebay-${listing.itemId}`,
+    product: toEbayProduct(listing),
+    detScore: EBAY_DETERMINISTIC_PERCENT,
+    fallbackPick: "safe",
+  };
 }
 
 const PICKS: RecommendationPick[] = [
@@ -153,21 +299,31 @@ function cleanReason(value: unknown): string | null {
  * It is elected from the VALIDATED items: highest blended score wins;
  * ties are broken by the objective deterministic score, then (for full
  * determinism) lower price, then name.
+ *
+ * Whenever a curated catalog item was validated, only catalog items are
+ * eligible — the Perfect Match stays a Thoughtful-curated pick. eBay
+ * listings only win in the degenerate case where no catalog item
+ * survived validation at all.
  */
 function electPerfectMatch(items: ValidatedItem[]): void {
   if (items.length === 0) return;
 
-  const winner = items.reduce((best, item) => {
+  const catalogItems = items.filter(
+    (item) => item.product.source === "catalog",
+  );
+  const eligible = catalogItems.length > 0 ? catalogItems : items;
+
+  const winner = eligible.reduce((best, item) => {
     if (item.matchScore !== best.matchScore) {
       return item.matchScore > best.matchScore ? item : best;
     }
     if (item.detScore !== best.detScore) {
       return item.detScore > best.detScore ? item : best;
     }
-    if (item.gift.price !== best.gift.price) {
-      return item.gift.price < best.gift.price ? item : best;
+    if (item.product.price !== best.product.price) {
+      return item.product.price < best.product.price ? item : best;
     }
-    return item.gift.name.localeCompare(best.gift.name) < 0 ? item : best;
+    return item.product.name.localeCompare(best.product.name) < 0 ? item : best;
   });
 
   for (const item of items) {
@@ -181,23 +337,23 @@ function electPerfectMatch(items: ValidatedItem[]): void {
  *
  * - giftId must exist in the supplied candidates — anything else is a
  *   hallucination and is discarded.
- * - matchScore must be a usable 0–100 number; otherwise the gift is
+ * - matchScore must be a usable 0–100 number; otherwise the item is
  *   scored deterministically alone (the item itself survives).
  * - reason is required (clamped); items without one are discarded.
  * - pick must be one of the known values; otherwise it is inferred from
- *   catalog metadata.
- * - the returned product object is ALWAYS the catalog gift, never the
- *   model's words.
+ *   the item's own metadata (catalog) or defaults to "safe" (eBay).
+ * - the returned product object is ALWAYS the catalog gift or the real
+ *   eBay listing, never the model's words.
  */
 export function validateAiItems(
   raw: unknown,
-  candidates: ScoredGift[],
+  candidates: CandidateEntry[],
 ): ValidatedItem[] {
   if (typeof raw !== "object" || raw === null) return [];
   const list = (raw as { recommendations?: unknown }).recommendations;
   if (!Array.isArray(list)) return [];
 
-  const byId = new Map(candidates.map((scored) => [scored.gift.id, scored]));
+  const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
   const seen = new Set<string>();
   const items: ValidatedItem[] = [];
 
@@ -206,10 +362,10 @@ export function validateAiItems(
     if (typeof entry !== "object" || entry === null) continue;
     if (typeof entry.giftId !== "string") continue;
 
-    const scored = byId.get(entry.giftId);
-    if (!scored || seen.has(scored.gift.id)) continue; // unknown/duplicate id → discard
+    const candidate = byId.get(entry.giftId);
+    if (!candidate || seen.has(candidate.id)) continue; // unknown/duplicate id → discard
 
-    const detScore = matchPercentage(scored.score);
+    const detScore = candidate.detScore;
     const aiScore = validateAiScore(entry.matchScore);
     const matchScore = blendedScore(detScore, aiScore);
 
@@ -220,10 +376,16 @@ export function validateAiItems(
       entry.pick as RecommendationPick,
     )
       ? (entry.pick as RecommendationPick)
-      : inferPick(scored.gift);
+      : candidate.fallbackPick;
 
-    seen.add(scored.gift.id);
-    items.push({ gift: scored.gift, matchScore, reason, pick, detScore });
+    seen.add(candidate.id);
+    items.push({
+      product: candidate.product,
+      matchScore,
+      reason,
+      pick,
+      detScore,
+    });
   }
 
   electPerfectMatch(items);
@@ -282,7 +444,7 @@ function toFallbackItem(
   pick: RecommendationPick,
 ): RecommendationItem {
   return {
-    gift: scored.gift,
+    product: toCatalogProduct(scored.gift),
     matchScore: matchPercentage(scored.score),
     reason: scored.gift.whyItsGood,
     pick,
@@ -349,14 +511,30 @@ export async function buildRecommendations(
 ): Promise<RecommendationsPayload> {
   // ONE candidate pool, shared by the AI stage and the fallback.
   const { pool } = selectCandidatePool(answers);
-  const candidates = pool.slice(0, CANDIDATE_LIMIT);
+  const catalogCandidates = pool.slice(0, CANDIDATE_LIMIT);
 
   try {
+    // Live eBay listings join the AI stage as real candidates. Any
+    // failure (missing credentials, OAuth, network, timeout, empty or
+    // malformed response) resolves to [] and the engine simply continues
+    // with the curated catalog.
+    const ebayCandidates = selectEbayCandidates(
+      await searchEbayGiftListings(answers),
+      answers,
+    );
+    const candidates: CandidateEntry[] = [
+      ...catalogCandidates.map(catalogEntry),
+      ...ebayCandidates.map(ebayEntry),
+    ];
+
     const completion = await createCompletion([
       { role: "system", content: buildSystemPrompt() },
       {
         role: "user",
-        content: buildUserPrompt(answers, serializeCandidates(candidates)),
+        content: buildUserPrompt(
+          answers,
+          serializeCandidates(catalogCandidates, ebayCandidates),
+        ),
       },
     ]);
 
@@ -366,8 +544,8 @@ export async function buildRecommendations(
 
       if (validated.length >= AI_MIN_ITEMS) {
         const items: RecommendationItem[] = validated.map(
-          ({ gift, matchScore, reason, pick }) => ({
-            gift,
+          ({ product, matchScore, reason, pick }) => ({
+            product,
             matchScore,
             reason,
             pick,

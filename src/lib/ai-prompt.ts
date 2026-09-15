@@ -6,6 +6,7 @@
  */
 
 import type { ScoredGift } from "@/lib/gift-matching";
+import { formatEbayPrice, type EbayListing } from "@/lib/ebay/normalize";
 import {
   BUDGET_OPTIONS,
   GIFT_TYPE_OPTIONS,
@@ -44,24 +45,38 @@ function budgetLine(answers: GiftAnswers): string {
 
 export interface SerializedCandidate {
   giftId: string;
+  /** "catalog" = curated Thoughtful gift, "ebay" = live eBay listing. */
+  source: "catalog" | "ebay";
   name: string;
-  category: string;
+  /** Catalog category id, or the real eBay category name. */
+  category: string | null;
   price: number;
+  currency: string;
   priceLabel: string;
   interests: string[];
   occasions: string[];
   relationships: string[];
   styles: string[];
-  description: string;
-  whyItsGood: string;
+  description: string | null;
+  whyItsGood: string | null;
 }
 
-export function serializeCandidates(candidates: ScoredGift[]): SerializedCandidate[] {
-  return candidates.map(({ gift }) => ({
+/**
+ * Serialize the two candidate sets for the model. eBay entries carry only
+ * the real data the API returned — unknown metadata is left empty so the
+ * model has nothing to hallucinate from.
+ */
+export function serializeCandidates(
+  catalog: ScoredGift[],
+  ebay: EbayListing[] = [],
+): SerializedCandidate[] {
+  const catalogEntries: SerializedCandidate[] = catalog.map(({ gift }) => ({
     giftId: gift.id,
+    source: "catalog",
     name: gift.name,
     category: gift.category,
     price: gift.price,
+    currency: "USD",
     priceLabel: gift.priceLabel,
     interests: gift.interests,
     occasions: gift.occasions,
@@ -70,6 +85,24 @@ export function serializeCandidates(candidates: ScoredGift[]): SerializedCandida
     description: gift.description,
     whyItsGood: gift.whyItsGood,
   }));
+
+  const ebayEntries: SerializedCandidate[] = ebay.map((listing) => ({
+    giftId: `ebay-${listing.itemId}`,
+    source: "ebay",
+    name: listing.title,
+    category: listing.categoryName,
+    price: listing.price,
+    currency: listing.currency,
+    priceLabel: formatEbayPrice(listing.price, listing.currency),
+    interests: [],
+    occasions: [],
+    relationships: [],
+    styles: [],
+    description: listing.description,
+    whyItsGood: null,
+  }));
+
+  return [...catalogEntries, ...ebayEntries];
 }
 
 /* ------------------------------------------------------------------ */
@@ -80,13 +113,17 @@ export function buildSystemPrompt(): string {
   return [
     "You are Thoughtful's gift recommendation assistant. Thoughtful is a warm, editorial gifting service — not a chatbot and not a search engine.",
     "",
-    "Your only job: choose and rank gifts from the candidate catalog provided in the user message.",
+    "Your only job: choose and rank items from the candidate catalog provided in the user message.",
     "",
     "STRICT RULES — never break these:",
-    "1. Choose ONLY gifts that appear in the candidate catalog. Never invent products, names, prices, brands, descriptions, URLs or availability.",
-    "2. Refer to gifts exclusively by their exact giftId string, copied character-for-character.",
+    "1. Choose ONLY items that appear in the candidate catalog. Never invent products, names, prices, brands, descriptions, URLs or availability.",
+    "2. Refer to items exclusively by their exact giftId string, copied character-for-character.",
     "3. Respond with a single valid JSON object and nothing else — no markdown, no code fences, no commentary.",
     "4. Never repeat a giftId.",
+    "",
+    "SOURCE OF ITEMS:",
+    "The candidate catalog mixes two real sources. Entries with source \"catalog\" are Thoughtful's curated gifts. Entries with source \"ebay\" are live listings fetched from eBay's API — their name, price, currency and category are actual eBay data.",
+    "Judge eBay entries by the information actually present (title, category, price, description, budget fit). Their interests/occasions/relationships/styles fields are intentionally empty — never assume or invent them, and never invent anything else about an eBay listing (seller, shipping, availability, brand).",
     "",
     "PRIORITIES, in order of importance:",
     "1. The personal detail, when provided — it is the strongest signal you have. Let it reshape your picks.",
@@ -150,7 +187,12 @@ export function buildUserPrompt(
   }
 
   lines.push("");
-  lines.push("CANDIDATE CATALOG — choose only from these gifts:");
+  const hasEbay = candidates.some((candidate) => candidate.source === "ebay");
+  lines.push(
+    hasEbay
+      ? "CANDIDATE CATALOG — choose only from these (curated gifts and live eBay listings):"
+      : "CANDIDATE CATALOG — choose only from these gifts:",
+  );
   lines.push(JSON.stringify(candidates, null, 0));
   lines.push("");
   lines.push(
