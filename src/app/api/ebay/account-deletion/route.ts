@@ -6,20 +6,22 @@ import { NextResponse } from "next/server";
  *
  * GET  : eBay Developer Portal challenge handshake. eBay sends
  *        ?challenge_code=… and expects back the SHA-256 hex of
- *        challengeCode + verificationToken + canonicalEndpoint.
+ *        challengeCode + verificationToken + endpoint.
+ *        The endpoint value is derived from the incoming request URL
+ *        (origin + pathname, no query string), so it automatically
+ *        matches whatever public URL eBay actually called.
  * POST : account-deletion notifications. Acknowledged immediately —
  *        Thoughtful persists no eBay user data, so there is nothing
  *        to delete and nothing sensitive to log.
  *
- * Both environment values are server-side configuration only and are
- * never exposed to the client.
+ * The verification token is server-side configuration only and is
+ * never exposed to the client or logged.
  */
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const TOKEN_ENV = "EBAY_MARKETPLACE_VERIFICATION_TOKEN";
-const ENDPOINT_ENV = "EBAY_MARKETPLACE_NOTIFICATION_ENDPOINT";
 
 /** 32–80 chars of letters, digits, underscore and hyphen only. */
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,80}$/;
@@ -30,42 +32,44 @@ const json = (body: Record<string, unknown>, status: number) =>
 const serverError = (code: string) =>
   json({ error: `server-misconfiguration:${code}` }, 500);
 
-type Config =
-  | { ok: true; token: string; endpoint: string }
+type Token =
+  | { ok: true; value: string }
   | { ok: false; response: NextResponse };
 
-function readConfig(): Config {
+function readVerificationToken(): Token {
   const token = process.env[TOKEN_ENV];
-  const endpoint = process.env[ENDPOINT_ENV];
 
-  if (!token || !endpoint) return { ok: false, response: serverError("missing-env") };
+  if (!token) return { ok: false, response: serverError("missing-env") };
   if (!TOKEN_PATTERN.test(token)) {
     return { ok: false, response: serverError("invalid-verification-token") };
   }
 
-  return { ok: true, token, endpoint };
+  return { ok: true, value: token };
 }
 
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const challengeCode = searchParams.get("challenge_code");
+  const requestUrl = new URL(request.url);
+  const challengeCode = requestUrl.searchParams.get("challenge_code");
 
   if (!challengeCode) {
     return json({ error: "missing-challenge_code" }, 400);
   }
 
-  const config = readConfig();
-  if (!config.ok) return config.response;
+  const token = readVerificationToken();
+  if (!token.ok) return token.response;
 
   /**
-   * Order matters and the endpoint value must be the EXACT canonical
-   * URL entered in the eBay Developer Portal — no request-derived
-   * origin, no localhost, and no query string.
+   * Canonical endpoint = origin + pathname of the URL eBay called.
+   * Query parameters (including challenge_code) are never included.
+   * For the production deployment this resolves to exactly:
+   * https://<your-domain>/api/ebay/account-deletion
    */
+  const endpoint = requestUrl.origin + requestUrl.pathname;
+
   const challengeResponse = createHash("sha256")
     .update(challengeCode, "utf8")
-    .update(config.token, "utf8")
-    .update(config.endpoint, "utf8")
+    .update(token.value, "utf8")
+    .update(endpoint, "utf8")
     .digest("hex");
 
   return json({ challengeResponse }, 200);
