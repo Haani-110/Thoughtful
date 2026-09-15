@@ -1,13 +1,15 @@
-import { db } from "@/db";
-import { sql } from "drizzle-orm";
+/**
+ * Liveness probe for Thoughtful.
+ *
+ * Deliberately database-independent: the app currently has no database in
+ * its runtime architecture, so the health check must not import or
+ * initialize any database client (this import chain previously caused
+ * "DATABASE_URL is required" failures during production builds).
+ */
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  try {
-    await db.execute(sql`select 1`);
-    return Response.json({ ok: true });
-  } catch {
-    return Response.json({ ok: false }, { status: 500 });
-  }
+  return Response.json({ ok: true });
 }
