@@ -28,7 +28,10 @@ export function GiftModal({
   item: RecommendationItem;
   onClose: () => void;
 }) {
-  const { gift } = item;
+  const { product } = item;
+  const categoryLabel = product.category
+    ? GIFT_CATEGORY_LABELS[product.category]
+    : null;
   const dialogRef = useRef<HTMLDivElement>(null);
   const [imageFailed, setImageFailed] = useState(false);
 
@@ -71,10 +74,10 @@ export function GiftModal({
     };
   }, [onClose]);
 
-  const occasions = gift.occasions
+  const occasions = product.occasions
     .slice(0, 3)
     .map((id) => labelFor(OCCASION_OPTIONS, id));
-  const styles = gift.styles
+  const styles = product.styles
     .filter((s) => s !== "surprise")
     .map((id) => labelFor(GIFT_TYPE_OPTIONS, id));
 
@@ -113,8 +116,8 @@ export function GiftModal({
               </div>
             ) : (
               <Image
-                src={gift.image}
-                alt={gift.name}
+                src={product.image}
+                alt={product.name}
                 fill
                 sizes="(min-width: 768px) 45vw, 100vw"
                 className="object-cover"
@@ -126,9 +129,11 @@ export function GiftModal({
           {/* ----------------------------- details ------------------------------ */}
           <div className="flex flex-col p-6 sm:p-8">
             <div className="flex items-center gap-2.5">
-              <span className="rounded-full border border-line bg-beige px-3 py-1 text-[0.6875rem] font-medium tracking-[0.16em] text-charcoal-2 uppercase">
-                {GIFT_CATEGORY_LABELS[gift.category]}
-              </span>
+              {categoryLabel ? (
+                <span className="rounded-full border border-line bg-beige px-3 py-1 text-[0.6875rem] font-medium tracking-[0.16em] text-charcoal-2 uppercase">
+                  {categoryLabel}
+                </span>
+              ) : null}
               <span className="text-[0.6875rem] font-medium tracking-[0.16em] text-bronze uppercase">
                 {item.matchScore}% match
               </span>
@@ -138,18 +143,20 @@ export function GiftModal({
               id="gift-modal-title"
               className="mt-4 font-serif text-[1.65rem] leading-snug tracking-[-0.01em] text-charcoal"
             >
-              {gift.name}
+              {product.name}
             </h3>
             <p className="mt-1.5 text-sm font-medium text-charcoal">
-              {gift.priceLabel}
+              {product.priceLabel}
               <span className="ml-2 font-normal text-muted">
-                · about ${gift.price}
+                · about ${product.price}
               </span>
             </p>
 
-            <p className="mt-4 text-sm leading-relaxed text-muted">
-              {gift.description}
-            </p>
+            {product.description ? (
+              <p className="mt-4 text-sm leading-relaxed text-muted">
+                {product.description}
+              </p>
+            ) : null}
 
             <div className="mt-6 border-t border-line-soft pt-5">
               <p className="text-[0.6875rem] font-medium tracking-[0.22em] text-faint uppercase">
@@ -160,28 +167,36 @@ export function GiftModal({
               </p>
             </div>
 
-            <dl className="mt-6 space-y-4 border-t border-line-soft pt-5 text-sm">
-              <div className="flex gap-4">
-                <dt className="w-24 shrink-0 text-[0.6875rem] font-medium tracking-[0.18em] text-muted uppercase">
-                  Their interests
-                </dt>
-                <dd className="text-charcoal-2">{gift.interests.join(", ")}</dd>
-              </div>
-              <div className="flex gap-4">
-                <dt className="w-24 shrink-0 text-[0.6875rem] font-medium tracking-[0.18em] text-muted uppercase">
-                  Great for
-                </dt>
-                <dd className="text-charcoal-2">{occasions.join(", ")}</dd>
-              </div>
-              {styles.length > 0 ? (
-                <div className="flex gap-4">
-                  <dt className="w-24 shrink-0 text-[0.6875rem] font-medium tracking-[0.18em] text-muted uppercase">
-                    Gift style
-                  </dt>
-                  <dd className="text-charcoal-2">{styles.join(", ")}</dd>
-                </div>
-              ) : null}
-            </dl>
+            {product.interests.length > 0 || occasions.length > 0 ? (
+              <dl className="mt-6 space-y-4 border-t border-line-soft pt-5 text-sm">
+                {product.interests.length > 0 ? (
+                  <div className="flex gap-4">
+                    <dt className="w-24 shrink-0 text-[0.6875rem] font-medium tracking-[0.18em] text-muted uppercase">
+                      Their interests
+                    </dt>
+                    <dd className="text-charcoal-2">
+                      {product.interests.join(", ")}
+                    </dd>
+                  </div>
+                ) : null}
+                {occasions.length > 0 ? (
+                  <div className="flex gap-4">
+                    <dt className="w-24 shrink-0 text-[0.6875rem] font-medium tracking-[0.18em] text-muted uppercase">
+                      Great for
+                    </dt>
+                    <dd className="text-charcoal-2">{occasions.join(", ")}</dd>
+                  </div>
+                ) : null}
+                {styles.length > 0 ? (
+                  <div className="flex gap-4">
+                    <dt className="w-24 shrink-0 text-[0.6875rem] font-medium tracking-[0.18em] text-muted uppercase">
+                      Gift style
+                    </dt>
+                    <dd className="text-charcoal-2">{styles.join(", ")}</dd>
+                  </div>
+                ) : null}
+              </dl>
+            ) : null}
 
             <p className="mt-auto flex items-center justify-center gap-2 pt-8 text-xs tracking-[0.04em] text-faint">
               <Asterisk className="h-3 w-3 text-champagne" aria-hidden="true" />

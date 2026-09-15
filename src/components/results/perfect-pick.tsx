@@ -17,7 +17,13 @@ export function PerfectPick({
   item: RecommendationItem;
   onView: (item: RecommendationItem) => void;
 }) {
-  const { gift } = item;
+  const { product } = item;
+  const isEbay = product.source === "ebay";
+  const eyebrow = isEbay
+    ? "eBay"
+    : product.category
+      ? GIFT_CATEGORY_LABELS[product.category]
+      : null;
   const [imageFailed, setImageFailed] = useState(false);
 
   return (
@@ -29,8 +35,8 @@ export function PerfectPick({
           </div>
         ) : (
           <Image
-            src={gift.image}
-            alt={gift.name}
+            src={product.image}
+            alt={product.name}
             fill
             priority
             sizes="(min-width: 1024px) 50vw, 100vw"
@@ -62,23 +68,27 @@ export function PerfectPick({
         </p>
 
         <h3 className="mt-6 font-serif text-[1.75rem] leading-snug tracking-[-0.01em] text-charcoal lg:text-[2.2rem]">
-          {gift.name}
+          {product.name}
         </h3>
         <p className="mt-2">
           <span className="mr-3 rounded-full border border-line bg-beige px-3 py-1 text-[0.6875rem] font-medium tracking-[0.16em] text-charcoal-2 uppercase">
-            {GIFT_CATEGORY_LABELS[gift.category]}
+            {eyebrow}
           </span>
           <span className="text-sm font-medium text-charcoal">
-            {gift.priceLabel}
-            <span className="ml-2 font-normal text-muted">
-              · about ${gift.price}
-            </span>
+            {product.priceLabel}
+            {!isEbay ? (
+              <span className="ml-2 font-normal text-muted">
+                · about ${product.price}
+              </span>
+            ) : null}
           </span>
         </p>
 
-        <p className="mt-5 text-[0.9375rem] leading-relaxed text-muted">
-          {gift.description}
-        </p>
+        {product.description ? (
+          <p className="mt-5 text-[0.9375rem] leading-relaxed text-muted">
+            {product.description}
+          </p>
+        ) : null}
 
         <blockquote className="mt-7 border-l-2 border-champagne pl-5">
           <p className="text-[0.6875rem] font-medium tracking-[0.22em] text-faint uppercase">
@@ -90,18 +100,34 @@ export function PerfectPick({
         </blockquote>
 
         <div className="mt-auto pt-9">
-          <button
-            type="button"
-            onClick={() => onView(item)}
-            aria-label={`View details for ${gift.name}`}
-            className="group inline-flex items-center justify-center gap-3 rounded-[2px] bg-burgundy px-7 py-4 text-[0.6875rem] font-medium tracking-[0.22em] text-cream uppercase transition-all duration-300 hover:-translate-y-px hover:bg-burgundy-2 active:bg-burgundy-3"
-          >
-            View this gift
-            <ArrowRight
-              className="h-3.5 w-3.5 transition-transform duration-300 group-hover:translate-x-1"
-              aria-hidden="true"
-            />
-          </button>
+          {isEbay && product.itemUrl ? (
+            <a
+              href={product.itemUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Shop ${product.name} on eBay`}
+              className="group inline-flex items-center justify-center gap-3 rounded-[2px] bg-burgundy px-7 py-4 text-[0.6875rem] font-medium tracking-[0.22em] text-cream uppercase transition-all duration-300 hover:-translate-y-px hover:bg-burgundy-2 active:bg-burgundy-3"
+            >
+              Shop on eBay
+              <ArrowRight
+                className="h-3.5 w-3.5 transition-transform duration-300 group-hover:translate-x-1"
+                aria-hidden="true"
+              />
+            </a>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onView(item)}
+              aria-label={`View details for ${product.name}`}
+              className="group inline-flex items-center justify-center gap-3 rounded-[2px] bg-burgundy px-7 py-4 text-[0.6875rem] font-medium tracking-[0.22em] text-cream uppercase transition-all duration-300 hover:-translate-y-px hover:bg-burgundy-2 active:bg-burgundy-3"
+            >
+              View this gift
+              <ArrowRight
+                className="h-3.5 w-3.5 transition-transform duration-300 group-hover:translate-x-1"
+                aria-hidden="true"
+              />
+            </button>
+          )}
         </div>
       </div>
     </article>

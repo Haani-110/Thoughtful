@@ -40,6 +40,17 @@ const joinNatural = (parts: string[]) =>
     ? (parts[0] ?? "")
     : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 
+/** True when any recommendation in the payload is a live eBay listing. */
+function payloadContainsEbay(payload: RecommendationsPayload): boolean {
+  return [
+    payload.groups.perfect,
+    ...payload.groups.safe,
+    ...payload.groups.creative,
+    ...payload.groups.personal,
+    ...payload.groups.experiences,
+  ].some((item) => item !== null && item.product.source === "ebay");
+}
+
 /** Deterministic supporting line, composed from the brief. */
 function supportLine(answers: GiftAnswers): string {
   const interests = answers.interests
@@ -119,7 +130,7 @@ function GiftSection({
       </div>
       <ul className="mt-6 grid items-stretch gap-5 sm:grid-cols-2 lg:grid-cols-3 lg:gap-6">
         {items.map((item, i) => (
-          <li key={item.gift.id} className="h-full">
+          <li key={item.product.id} className="h-full">
             <GiftCard item={item} index={startIndex + i} onView={onView} />
           </li>
         ))}
@@ -449,7 +460,9 @@ export function ResultsExperience() {
               </div>
               <p className="max-w-md text-xs leading-relaxed tracking-[0.04em] text-faint">
                 {payload.source === "ai"
-                  ? "Ranked around everything you told us — every gift is from Thoughtful's curated catalog."
+                  ? payloadContainsEbay(payload)
+                    ? "Ranked around everything you told us — gifts come from Thoughtful's curated catalog and live eBay listings."
+                    : "Ranked around everything you told us — every gift is from Thoughtful's curated catalog."
                   : "Chosen from Thoughtful's curated catalog by our matching rules — AI ranking is resting right now."}
               </p>
             </div>
