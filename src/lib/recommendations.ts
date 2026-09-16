@@ -207,6 +207,38 @@ function selectEbayCandidates(
     .slice(0, EBAY_CANDIDATE_LIMIT);
 }
 
+/**
+ * Hard ceiling on how long a request may WAIT on the live-eBay stage.
+ *
+ * The eBay layer bounds its own hops (OAuth token, search), but those
+ * bounds run in series with each other and in front of the AI stage, so a
+ * slow or stalling eBay API could stack tens of seconds ahead of every
+ * request before ranking even started. The search module's documented
+ * contract is that any failure resolves to an empty list and the curated
+ * catalog carries on — this enforces that promise at the orchestration
+ * layer too: listings not in by then are simply skipped for this request.
+ * The search itself is never cancelled mid-flight; its result is just no
+ * longer awaited, so behaviour and product data stay identical either way.
+ */
+const EBAY_STAGE_WAIT_MS = 4_000;
+
+/**
+ * Race the live-eBay search against the stage budget. Never rejects: a
+ * failure or a timeout both mean "no usable listings right now" — [].
+ */
+function waitForEbayListings(answers: GiftAnswers): Promise<EbayListing[]> {
+  const search = searchEbayGiftListings(answers).catch(
+    () => [] as EbayListing[],
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<EbayListing[]>((resolve) => {
+    timer = setTimeout(() => resolve([]), EBAY_STAGE_WAIT_MS);
+  });
+  return Promise.race([search, budget]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
 function ebayEntry(listing: EbayListing): CandidateEntry {
   return {
     id: `ebay-${listing.itemId}`,
@@ -517,9 +549,11 @@ export async function buildRecommendations(
     // Live eBay listings join the AI stage as real candidates. Any
     // failure (missing credentials, OAuth, network, timeout, empty or
     // malformed response) resolves to [] and the engine simply continues
-    // with the curated catalog.
+    // with the curated catalog. The whole wait is additionally capped by
+    // EBAY_STAGE_WAIT_MS so a stalling eBay API never serialises its own
+    // timeouts ahead of the AI stage.
     const ebayCandidates = selectEbayCandidates(
-      await searchEbayGiftListings(answers),
+      await waitForEbayListings(answers),
       answers,
     );
     const candidates: CandidateEntry[] = [
